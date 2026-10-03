@@ -11,3 +11,14 @@
 - Shutdown now cancels orders while the socket is still open, verifies empty book, then disarms.
 
 Optional extra speed:  pip install uvloop orjson
+- CROSS-VENUE FEEDS (feeds.py): Binance USDT-M (bookTicker, depth10@100ms, aggTrade, forceOrder) and Bybit v5 linear (orderbook.50 snapshot+delta, publicTrade, liquidation). Signals: basis-adjusted lead/lag (removes USDT-vs-USD offset), per-venue velocity, depth-weighted OBI, external aggressor flow, liquidation pressure, dispersion; all staleness-gated and cleared on disconnect. Used in fair value, expected adverse move, and a hard "pull the stale side" guard (consensus across venues required). See CROSS_* in .env.example.
+- FIX Bybit feed: liquidation topic is now `allLiquidation.<SYM>` (legacy `liquidation.` fallback), subscribed in a SEPARATE request so a rejected optional topic can't starve price data; bad symbol disables the feed instead of reconnect-looping.
+- FIX single-venue pulls need 1.5x the velocity threshold; emergency taker stop floored at 4 ticks; duplicate taker IOCs suppressed for 1.5s; taker fills use exchange avg price when reported.
+
+## Inventory-bleed patch
+- ledger.py: learner bounds for STRESS_LOSS_BPS / MAX_HOLD_S now follow your env (were hard floors of 10bps / 60s, silently overriding lower values).
+- bot.py: ET_PAUSE_WINDOWS (e.g. 09:30-09:45) blocks ADDING sides only; unwinds continue.
+- bot.py: FILL log shows ET=; journal rows carry level, ET, obi, tfi, spread; per-fill markout rows (type=markout) written for offline fitting.
+- bot.py: status/LEARN markouts now plain means of last N (previously a 60s-decayed average that printed 0.00 whenever idle - display only, learner was unaffected).
+- analyze_journal.py: conditional markout report (level / ET hour / book lean / flow / spread).
+- .env.nvda_patched: EXTRA_LEVELS=0, MAX_POSITION_USD=1000, queue/fragility/one-sided ON, tighter exits.
