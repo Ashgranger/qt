@@ -66,6 +66,9 @@ class MarketMaker:
         self._tick_lock = asyncio.Lock()
         self._dirty_evt = asyncio.Event()
         self._bg_tasks: dict = {}
+        self._dms_armed = False
+        self._dms_fail = 0
+        self._dms_ok_until = 0.0
         self._files: dict = {}
         self._tick_on_trades = os.getenv("TICK_ON_TRADES", "1").strip().lower() in ("1", "true", "yes", "on")
 
@@ -289,6 +292,14 @@ class MarketMaker:
             if not mid or not self.md.bid or not self.md.ask:
                 return
 
+            if (self.cfg.dms_required and self.cfg.dms_enabled and not self.cfg.dry_run
+                    and now > self._dms_ok_until):
+                await self.om.cancel_all()
+                if now - self._last_pause_log["oracle"] > 30.0:
+                    self._last_pause_log["oracle"] = now
+                    log.error("DMS_REQUIRED=1 but dead man's switch is not armed - quoting paused")
+                return
+
             tot_pnl = self.ledger.total_pnl(mid)
             if tot_pnl <= -self.cfg.session_max_loss_usd:
                 log.error("SESSION MAX LOSS BREACHED ($%s <= -$%s) - HALTING",
@@ -376,11 +387,71 @@ class MarketMaker:
             await self.om.sync_quotes(targets, now, blocked_sides=blocked_sides)
 
     async def _heartbeat(self, now: float) -> None:
-        if now - self._last_heartbeat < self.cfg.heartbeat_s:
+        """Arm/refresh the exchange-side dead man's switch (scheduleCancel) for our market."""
+        cfg = self.cfg
+        if cfg.dry_run or not cfg.dms_enabled or not self.md.info:
+            return
+        interval = min(cfg.heartbeat_s, cfg.dms_ttl_s / 3.0)
+        if now - self._last_heartbeat < interval:
             return
         self._last_heartbeat = now
         try:
-            await self.ex.call("post", {"type": "heartbeat", "payload": {}}, timeout=4.0)
+            deadline_us = int((time.time() + cfg.dms_ttl_s) * 1_000_000)
+            resp = await self.ex.write(self.signer.schedule_cancel(self.md.info, deadline_us))
+            ok = (isinstance(resp, dict) and resp.get("status") in (200, 202)
+                  and not resp.get("error"))
+            if ok:
+                if not self._dms_armed:
+                    log.info("Dead man's switch ARMED (market %s, ttl %.0fs, refresh every %.1fs)",
+                             self.md.info.name, cfg.dms_ttl_s, interval)
+                self._dms_armed = True
+                self._dms_fail = 0
+                self._dms_ok_until = now + cfg.dms_ttl_s
+                return
+            self._dms_fail += 1
+            if self._dms_fail in (1, 3) or self._dms_fail % 12 == 0:
+                log.error("DEAD MAN'S SWITCH NOT ARMED (attempt %d): status=%s %s",
+                          self._dms_fail, resp.get("status") if isinstance(resp, dict) else None,
+                          json.dumps(resp.get("error") if isinstance(resp, dict) else resp)[:300])
+        except Exception as e:
+            self._dms_fail += 1
+            log.error("dead man's switch refresh error: %s", e)
+
+    async def _graceful_cancel(self) -> None:
+        """Cancel everything while still connected; disarm the switch only if the book is verified empty
+        (otherwise leave it armed so the exchange pulls anything we missed)."""
+        for _t in self._bg_tasks.values():
+            if not _t.done():
+                _t.cancel()
+        try:
+            await self.om.cancel_all(force=True)
+        except Exception as e:
+            log.warning("graceful cancel_all error: %s", e)
+        if self.cfg.dry_run or not self.md.info:
+            return
+        try:
+            await asyncio.sleep(0.4)
+            res = await self.ex.get("orders", {"address": self.cfg.address, "accountIndex": self.cfg.account_index,
+                                                "marketId": self.md.info.market_id}, timeout=3.0)
+            rows = [r for r in (res or {}).get("openOrders", []) if isinstance(r, dict)
+                    and r.get("marketId") in (None, self.md.info.market_id)] if res is not None else None
+            if rows == []:
+                await self._disarm_dms()
+            elif rows is None:
+                log.warning("could not verify empty book on shutdown - leaving dead man's switch armed")
+            else:
+                log.warning("%d order(s) still open on shutdown - leaving dead man's switch armed", len(rows))
+        except Exception as e:
+            log.warning("shutdown verification error: %s", e)
+
+    async def _disarm_dms(self) -> None:
+        cfg = self.cfg
+        if cfg.dry_run or not cfg.dms_enabled or not self.md.info or not self._dms_armed:
+            return
+        try:
+            await self.ex.write(self.signer.schedule_cancel(self.md.info, None))
+            self._dms_armed = False
+            log.info("Dead man's switch disarmed")
         except Exception:
             pass
 
@@ -483,6 +554,8 @@ class MarketMaker:
                     await self.ex.subscribe("positions", self.cfg.address)
 
                     reconnect_delay = 1.0
+                    self._last_heartbeat = 0.0
+                    await self._heartbeat(self.now())  # arm before any quote is placed
 
                     if self.om.maybe_orders:
                         await self.om.cancel_all()
@@ -502,6 +575,9 @@ class MarketMaker:
                             self._dirty_evt.clear()
                         except asyncio.TimeoutError:
                             pass
+
+                    if self.stop_evt.is_set():
+                        await self._graceful_cancel()  # must happen while the socket is still open
 
             except (ConnectionClosed, ConnectionResetError, BrokenPipeError, OSError) as e:
                 log.warning("WebSocket connection dropped (%s). Reconnecting in %.1fs...", e, reconnect_delay)
