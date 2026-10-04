@@ -782,13 +782,13 @@ class Ledger:
             else:
                 self.learner.markout_model.record(f.side, regime, 0, horizon, float(m_bps))
 
-    @property
     @staticmethod
     def raw_mean_bps(buf) -> Decimal:
         """Plain mean of the last stored markouts (no 60s decay, so it never reads 0 when idle)."""
         vals = [(it[1] if isinstance(it, tuple) else it) for it in buf]
         return (sum(vals, ZERO) / Decimal(len(vals))) if vals else ZERO
 
+    @property
     def avg_markout_1s_bps(self) -> Decimal:
         return self._calc_weighted_markout(self.markouts_1s)
 
