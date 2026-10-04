@@ -211,7 +211,7 @@ class MarketMakingEngine:
         if not mid or mid <= ZERO or qty <= ZERO:
             return (mid or ZERO, ZERO)
 
-        depth = md._book_depth_bids if side == SELL else md._book_depth_asks
+        depth = md.depth_levels("BUY" if side == SELL else "SELL")
         if not depth:
             touch = md.bid if side == SELL else md.ask
             if not touch:
