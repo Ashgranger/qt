@@ -142,6 +142,8 @@ class Config:
     # --- Inventory Risk Management & Taker Loss Cut ------------------------ #
     enable_smart_inventory_mgmt: bool
     taker_fee_bps: Decimal
+    taker_slip_bps: Decimal
+    taker_fill_price_mode: str
     emergency_taker_loss_bps: Decimal
     emergency_taker_score_threshold: Decimal
 
@@ -284,6 +286,8 @@ class Config:
             markout_horizons_s=str(_e("MARKOUT_HORIZONS_S", "1,5,30")),
             enable_smart_inventory_mgmt=_b("ENABLE_SMART_INVENTORY_MGMT", "1"),
             taker_fee_bps=_d("TAKER_FEE_BPS", "2.2"),
+            taker_slip_bps=_d("TAKER_SLIP_BPS", "4"),
+            taker_fill_price_mode=str(_e("TAKER_FILL_PRICE_MODE", "est")).lower(),
             emergency_taker_loss_bps=_d("EMERGENCY_TAKER_LOSS_BPS", "6.0"),
             emergency_taker_score_threshold=_d("EMERGENCY_TAKER_SCORE_THRESHOLD", "2.5"),
             enable_selective_touch=_b("ENABLE_SELECTIVE_TOUCH", "1"),

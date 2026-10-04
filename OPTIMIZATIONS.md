@@ -22,3 +22,8 @@ Optional extra speed:  pip install uvloop orjson
 - bot.py: status/LEARN markouts now plain means of last N (previously a 60s-decayed average that printed 0.00 whenever idle - display only, learner was unaffected).
 - analyze_journal.py: conditional markout report (level / ET hour / book lean / flow / spread).
 - .env.nvda_patched: EXTRA_LEVELS=0, MAX_POSITION_USD=1000, queue/fragility/one-sided ON, tighter exits.
+
+## Taker phantom-loss fix
+- Cause: emergency/stress taker IOCs were sent 0.15% (15bps) through the book and the ledger booked the fill at that LIMIT price (the exchange update carried no execution-price field). Every taker fill in the log shows fill px == limit, edge -15..-18bps. That one entry jumped inventory_pnl by about -$0.6 and fed -11bps markouts to the learner (tox_mult up, edge widened, bot stopped quoting).
+- Fix: TAKER_SLIP_BPS (default 4) sets the limit offset; TAKER_FILL_PRICE_MODE=est books the order-book-walk (VWAP) price when the exchange sends no avg price; TAKER_RAW log line dumps the raw update so the true field can be confirmed. Set TAKER_FILL_PRICE_MODE=limit for the old behavior.
+- Test: test_17.

@@ -23,6 +23,7 @@ class QuoteTarget:
     is_exit_quote: bool
     is_taker: bool = False
     quote_mid: Optional[Decimal] = None
+    est_px: Optional[Decimal] = None
 
 
 class MarketMakingEngine:
@@ -415,12 +416,13 @@ class MarketMakingEngine:
 
                     if trigger_taker and md.ask and qty >= m.min_size:
                         vwap, cross_cost = self.calculate_vwap_cross_cost(BUY, qty, md)
-                        slip_buffer = max(Decimal("2") * tick, q_up(md.ask * Decimal("0.0015"), tick))
+                        slip_buffer = max(Decimal("2") * tick, q_up(md.ask * self.cfg.taker_slip_bps / BPS, tick))
                         taker_px = q_up(max(md.ask, vwap) + slip_buffer, tick)
+                        est_px = min(max(md.ask, vwap), taker_px)   # what a CLOB IOC really pays: walk of the book
                         quotes.append(QuoteTarget(
                             pair_index=0, side=BUY, price=taker_px, qty=qty,
                             expected_value_bps=-cross_cost, fill_probability=1.0,
-                            is_exit_quote=True, is_taker=True, quote_mid=mid
+                            is_exit_quote=True, is_taker=True, quote_mid=mid, est_px=est_px
                         ))
                     else:
                         min_profit_bps = max(self.cfg.exit_min_profit_bps, Decimal("1.0"))
@@ -632,12 +634,13 @@ class MarketMakingEngine:
 
                     if trigger_taker and md.bid and qty >= m.min_size:
                         vwap, cross_cost = self.calculate_vwap_cross_cost(SELL, qty, md)
-                        slip_buffer = max(Decimal("2") * tick, q_down(md.bid * Decimal("0.0015"), tick))
+                        slip_buffer = max(Decimal("2") * tick, q_down(md.bid * self.cfg.taker_slip_bps / BPS, tick))
                         taker_px = q_down(min(md.bid, vwap) - slip_buffer, tick)
+                        est_px = max(min(md.bid, vwap), taker_px)
                         quotes.append(QuoteTarget(
                             pair_index=0, side=SELL, price=taker_px, qty=qty,
                             expected_value_bps=-cross_cost, fill_probability=1.0,
-                            is_exit_quote=True, is_taker=True, quote_mid=mid
+                            is_exit_quote=True, is_taker=True, quote_mid=mid, est_px=est_px
                         ))
                     else:
                         min_profit_bps = max(self.cfg.exit_min_profit_bps, Decimal("1.0"))

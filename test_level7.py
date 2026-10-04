@@ -385,6 +385,23 @@ class TestLevel7MarketMaker(unittest.IsolatedAsyncioTestCase):
         self.assertLess(ask_order.price, D("80010.0"), "Ask should be shaded down to breakeven maker under adverse flow")
         print("✓ test_15_smart_inventory_fast_breakeven_unwind passed: Flow-accelerated breakeven unwind active.")
 
+    async def test_17_taker_fill_booked_at_book_price_not_far_limit(self):
+        """Regression: IOC taker exits were booked at their far-through limit (-15..-18bps phantom loss)."""
+        bot, s, clock = sim.make(EXTRA_LEVELS=0, ORDER_USD=20, MAX_POSITION_USD=100,
+                                 EXIT_MIN_PROFIT_BPS="1.5", ENABLE_SMART_INVENTORY_MGMT=1,
+                                 MIN_REQUOTE_S="0.1", EMERGENCY_TAKER_LOSS_BPS="6.0")
+        await sim.step(bot, s, clock, "80000.0", "80080.0")
+        s.taker(SELL)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        clock.t += 0.5
+        s.push_trade(SELL, "2.0", "79900.0")
+        await sim.step(bot, s, clock, "79900.0", "79920.0", bsz="0.1", asz="2.0")
+        f = bot.ledger.fills[-1]
+        self.assertEqual(bot.ledger.position, D(0))
+        self.assertGreaterEqual(f.price, D("79899.0"), "taker must be booked near the touch (bid 79900), not at its limit")
+        self.assertGreater(f.edge_bps, D("-3"))
+
     async def test_16_emergency_taker_cut_on_adverse_cascade(self):
         """Test Emergency Taker Cut: When adverse loss and flow exceed threshold, bot fires IOC taker order to cut loss."""
         bot, s, clock = sim.make(EXTRA_LEVELS=0, ORDER_USD=20, MAX_POSITION_USD=100,
