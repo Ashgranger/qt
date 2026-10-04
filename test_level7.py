@@ -402,6 +402,23 @@ class TestLevel7MarketMaker(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(f.price, D("79899.0"), "taker must be booked near the touch (bid 79900), not at its limit")
         self.assertGreater(f.edge_bps, D("-3"))
 
+    async def test_18_adverse_obi_persist_exit(self):
+        """Book leaning against an open long for a few seconds + small loss -> early taker exit, only when enabled."""
+        async def run(enabled):
+            bot, s, clock = sim.make(EXTRA_LEVELS=0, ORDER_USD=20, MAX_POSITION_USD=100,
+                                     EXIT_MIN_PROFIT_BPS="1.5", ENABLE_SMART_INVENTORY_MGMT=1,
+                                     MIN_REQUOTE_S="0.1", STRESS_LOSS_BPS="50", EMERGENCY_TAKER_LOSS_BPS="50",
+                                     ADV_OBI_EXIT=enabled, ADV_OBI_SECS="3", ADV_OBI_LOSS_BPS="2.0")
+            await sim.step(bot, s, clock, "80000.0", "80080.0")
+            s.taker(SELL)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            for _ in range(8):
+                await sim.step(bot, s, clock, "79970.0", "79990.0", bsz="0.1", asz="5.0", dt=1.0)
+            return bot.ledger.position
+        self.assertEqual(await run("1"), D(0), "persistent adverse book + loss must flatten via taker")
+        self.assertNotEqual(await run("0"), D(0), "rule is off by default")
+
     async def test_16_emergency_taker_cut_on_adverse_cascade(self):
         """Test Emergency Taker Cut: When adverse loss and flow exceed threshold, bot fires IOC taker order to cut loss."""
         bot, s, clock = sim.make(EXTRA_LEVELS=0, ORDER_USD=20, MAX_POSITION_USD=100,
